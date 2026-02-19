@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 using System.Text;
 using Image = SixLabors.ImageSharp.Image;
 
@@ -144,44 +145,250 @@ public class UnpackBundle
         foreach (var file in files)
         {
             string fileName = Path.GetFileNameWithoutExtension(file);
+            string extension = Path.GetExtension(file).ToLower();
+            
             if (LoadAssets.TryGetValue(fileName, out AssetContainer? cont) && cont != null)
             {
                 AssetTypeValueField baseField = AssetWorkspace.GetBaseField(cont)!;
-                byte[] byteData = File.ReadAllBytes(file);
-                baseField["m_Script"].AsByteArray = byteData;
+                
+                // Check if this is a Texture2D asset (ClassId 28)
+                if (cont.ClassId == 28 && extension == ".png")
+                {
+                    ImportTexture2D(baseField, file, cont);
+                }
+                else
+                {
+                    // Regular text asset import
+                    byte[] byteData = File.ReadAllBytes(file);
+                    baseField["m_Script"].AsByteArray = byteData;
 
-                byte[] savedAsset = baseField.WriteToByteArray();
+                    byte[] savedAsset = baseField.WriteToByteArray();
 
-                var replacer = new AssetsReplacerFromMemory(
-                    cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
-                AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
+                    var replacer = new AssetsReplacerFromMemory(
+                        cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
+                    AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
+                }
             }
         }
+    }
+
+    private void ImportTexture2D(AssetTypeValueField baseField, string filePath, AssetContainer cont)
+    {
+        try
+        {
+            // Load PNG image
+            using (var image = Image.Load(filePath))
+            {
+                // Get texture info from baseField
+                int origWidth = baseField["m_Width"].AsInt;
+                int origHeight = baseField["m_Height"].AsInt;
+                
+                // Resize if dimensions don't match
+                if (image.Width != origWidth || image.Height != origHeight)
+                {
+                    image.Mutate(x => x.Resize(origWidth, origHeight));
+                    Console.WriteLine($"调整纹理尺寸: {Path.GetFileName(filePath)} ({image.Width}x{image.Height} -> {origWidth}x{origHeight})");
+                }
+
+                // Convert to BGRA32 format
+                using (var bgraImage = image.CloneAs<Bgra32>())
+                {
+                    // Flip vertically (Unity stores textures flipped)
+                    bgraImage.Mutate(i => i.Flip(FlipMode.Vertical));
+                    
+                    // Get raw pixel data
+                    byte[] pixelData = new byte[origWidth * origHeight * 4];
+                    bgraImage.CopyPixelDataTo(pixelData);
+                    
+                    // Read current texture info
+                    var texture = TextureFile.ReadTextureFile(baseField);
+                    
+                    // Get the texture format
+                    int textureFormat = baseField["m_TextureFormat"].AsInt;
+                    
+                    // Encode the pixel data to the appropriate format
+                    byte[] encodedData = EncodeTextureData(pixelData, origWidth, origHeight, textureFormat);
+                    
+                    // Check if texture uses stream data
+                    var streamData = baseField["m_StreamData"];
+                    long streamOffset = streamData["offset"].AsLong;
+                    
+                    if (streamOffset > 0 || (streamData["size"].AsLong > 0 && !string.IsNullOrEmpty(streamData["path"].AsString)))
+                    {
+                        // Streamed texture - save to separate file
+                        string streamPath = streamData["path"].AsString;
+                        if (!string.IsNullOrEmpty(streamPath))
+                        {
+                            // Update the stream file
+                            string fullStreamPath = Path.Combine(Path.GetDirectoryName(this.BundleInst.path) ?? "", streamPath);
+                            if (File.Exists(fullStreamPath))
+                            {
+                                using (var fs = new FileStream(fullStreamPath, FileMode.Open, FileAccess.Write))
+                                {
+                                    fs.Seek(streamOffset, SeekOrigin.Begin);
+                                    fs.Write(encodedData, 0, encodedData.Length);
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Embedded texture - update image data directly
+                        baseField["image data"].AsByteArray = encodedData;
+                    }
+                    
+                    // Update texture dimensions if changed
+                    baseField["m_Width"].AsInt = origWidth;
+                    baseField["m_Height"].AsInt = origHeight;
+                    
+                    // Write the modified asset
+                    byte[] savedAsset = baseField.WriteToByteArray();
+                    var replacer = new AssetsReplacerFromMemory(
+                        cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
+                    AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
+                    
+                    Console.WriteLine($"导入纹理: {Path.GetFileName(filePath)} ({origWidth}x{origHeight})");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"导入纹理失败 {Path.GetFileName(filePath)}: {ex.Message}");
+        }
+    }
+
+    private byte[] EncodeTextureData(byte[] rgbaData, int width, int height, int textureFormat)
+    {
+        // For now, just return RGBA32 data directly
+        // Unity texture format 4 is RGBA32
+        if (textureFormat == 4 || textureFormat == 0)
+        {
+            // Convert BGRA to RGBA if needed
+            byte[] rgba = new byte[rgbaData.Length];
+            for (int i = 0; i < rgbaData.Length; i += 4)
+            {
+                rgba[i] = rgbaData[i + 2];     // R
+                rgba[i + 1] = rgbaData[i + 1]; // G
+                rgba[i + 2] = rgbaData[i];     // B
+                rgba[i + 3] = rgbaData[i + 3]; // A
+            }
+            return rgba;
+        }
+        
+        // For other formats, return data as-is (may need format-specific encoding)
+        return rgbaData;
     }
 
     public void BatchExport()
     {
         var dir = ExportDir;
+        int textureCount = 0;
+        int textAssetCount = 0;
+        int skippedCount = 0;
+        
+        // 打印所有不同的 ClassId 以便调试
+        var uniqueClassIds = LoadAssets.Values.Select(c => c.ClassId).Distinct().OrderBy(id => id).ToList();
+        Console.WriteLine($"加载的资源类型 (ClassId): {string.Join(", ", uniqueClassIds)}");
+        
+        // 打印白名单配置
+        var whitelist = ConfigurationManager.Settings.ExportWhitelist;
+        if (whitelist.Count > 0)
+        {
+            Console.WriteLine($"应用导出白名单: {string.Join(", ", whitelist)}");
+        }
 
         foreach (var (_, cont) in LoadAssets)
         {
             AssetTypeValueField baseField = AssetWorkspace.GetBaseField(cont)!;
             var name = baseField?["m_Name"]?.AsString;
-            var byteData = baseField?["m_Script"]?.AsByteArray;
-            if(name == null || byteData == null) {  continue; }
+            if (name == null) { continue; }
 
             name = PathUtils.ReplaceInvalidPathChars(name);
-
-            string extension = ".json";
-            string ucontExt = TextAssetHelper.GetUContainerExtension(cont);
-            if (ucontExt != string.Empty)
+            string fileName = $"{name}-{Path.GetFileName(cont.FileInstance.path)}-{cont.PathId}";
+            
+            // 检查白名单
+            if (whitelist.Count > 0)
             {
-                extension = ucontExt;
+                bool isWhitelisted = false;
+                foreach (var keyword in whitelist)
+                {
+                    if (name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        fileName.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        isWhitelisted = true;
+                        break;
+                    }
+                }
+                
+                if (!isWhitelisted)
+                {
+                    skippedCount++;
+                    continue;
+                }
             }
 
-            string file = Path.Combine(dir, $"{name}-{Path.GetFileName(cont.FileInstance.path)}-{cont.PathId}{extension}");
+            // Check if this is a Texture2D asset (ClassId 28 is Texture2D)
+            if (cont.ClassId == 28)
+            {
+                ExportTexture2D(baseField, name, dir, fileName, cont);
+                textureCount++;
+            }
+            else
+            {
+                // Regular text asset export
+                var byteData = baseField?["m_Script"]?.AsByteArray;
+                if (byteData == null) { continue; }
 
-            File.WriteAllBytes(file, byteData);
+                string extension = ".json";
+                string ucontExt = TextAssetHelper.GetUContainerExtension(cont);
+                if (ucontExt != string.Empty)
+                {
+                    extension = ucontExt;
+                }
+
+                string file = Path.Combine(dir, $"{fileName}{extension}");
+                File.WriteAllBytes(file, byteData);
+                textAssetCount++;
+            }
+        }
+        
+        Console.WriteLine($"导出统计: {textAssetCount} 个文本资源, {textureCount} 个纹理资源, 跳过 {skippedCount} 个资源");
+    }
+
+    private void ExportTexture2D(AssetTypeValueField baseField, string name, string dir, string fileName, AssetContainer cont)
+    {
+        try
+        {
+            // Read Texture2D data
+            var texture = TextureFile.ReadTextureFile(baseField);
+            
+            // Use the FileInstance directly from the container
+            AssetsFileInstance fileInst = cont.FileInstance;
+            
+            // Get the raw texture data
+            byte[] textureData = texture.GetTextureData(fileInst);
+            
+            if (textureData == null || textureData.Length == 0)
+            {
+                Console.WriteLine($"警告: 无法获取纹理数据: {name}");
+                return;
+            }
+
+            // Convert to ImageSharp image
+            using (var image = Image.LoadPixelData<Bgra32>(textureData, texture.m_Width, texture.m_Height))
+            {
+                // Flip vertically (Unity stores textures flipped)
+                image.Mutate(i => i.Flip(FlipMode.Vertical));
+                
+                // Save as PNG
+                string file = Path.Combine(dir, $"{fileName}.png");
+                image.SaveAsPng(file);
+                Console.WriteLine($"导出纹理: {name} -> {fileName}.png ({texture.m_Width}x{texture.m_Height})");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"导出纹理失败 {name}: {ex.Message}");
         }
     }
 

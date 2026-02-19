@@ -90,4 +90,17 @@ public class ConfigurationSettings
     public string WorkDir { get; set; } = "work";
     public string OriginPath { get; set; } = "";
     public string OutputPath { get; set; } = "";
+    
+    /// <summary>
+    /// WorkDir文件名映射字典。键为原始名称（或部分内容），值为替换后的名称。
+    /// 例如：{"zh-Hans": "en-US"} 会将workdir中的zh-Hans文件匹配到export中的en-US文件
+    /// </summary>
+    public Dictionary<string, string> WorkDirFileNameMapping { get; set; } = new Dictionary<string, string>();
+    
+    /// <summary>
+    /// 导出白名单列表。只有文件名中包含列表中任一关键词的资源才会被导出。
+    /// 如果列表为空，则导出所有资源。
+    /// 例如：["zh-Hans", "en-US", "Mouse_Text"] 只导出包含这些关键词的文件
+    /// </summary>
+    public List<string> ExportWhitelist { get; set; } = new List<string>();
 }

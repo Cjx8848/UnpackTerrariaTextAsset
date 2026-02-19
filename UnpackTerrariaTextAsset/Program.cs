@@ -244,26 +244,44 @@ class Program
         // 简短名称 = 去掉扩展名后，取 -resources.assets- 之前的部分
         // 例如: zh-Hans-resources.assets.txt -> zh-Hans
         var workFileDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var workFileMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // 记录映射关系：映射后的名称 -> 原始文件路径
+        
         foreach (var workFile in workFiles)
         {
             string fileName = Path.GetFileName(workFile);
             string fileNameWithoutExt = Path.GetFileNameWithoutExtension(workFile);
             
             // 提取简短名称：找到 "-resources.assets" 并取前面的部分
-            string shortName = fileNameWithoutExt;
+            string originalShortName = fileNameWithoutExt;
             int resourcesIndex = fileNameWithoutExt.IndexOf("-resources.assets", StringComparison.OrdinalIgnoreCase);
             if (resourcesIndex > 0)
             {
-                shortName = fileNameWithoutExt.Substring(0, resourcesIndex);
+                originalShortName = fileNameWithoutExt.Substring(0, resourcesIndex);
             }
             
-            if (!workFileDict.ContainsKey(shortName))
+            // 应用文件名映射（如果配置了的话）
+            string mappedShortName = originalShortName;
+            if (ConfigurationManager.Settings.WorkDirFileNameMapping.Count > 0)
             {
-                workFileDict[shortName] = workFile;
+                foreach (var mapping in ConfigurationManager.Settings.WorkDirFileNameMapping)
+                {
+                    // 支持部分匹配替换，例如将 "zh-Hans" 替换为 "en-US"
+                    if (originalShortName.IndexOf(mapping.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        mappedShortName = ReplaceIgnoreCase(originalShortName, mapping.Key, mapping.Value);
+                        Console.WriteLine($"文件名映射: {originalShortName} -> {mappedShortName} (应用规则: {mapping.Key} -> {mapping.Value})");
+                        break; // 只应用第一个匹配的映射
+                    }
+                }
+            }
+            
+            if (!workFileDict.ContainsKey(mappedShortName))
+            {
+                workFileDict[mappedShortName] = workFile;
             }
             else
             {
-                Console.WriteLine($"警告: WorkDir 中存在重复名称 '{shortName}'，跳过: {fileName}");
+                Console.WriteLine($"警告: WorkDir 中存在重复名称 '{mappedShortName}'，跳过: {fileName}");
             }
         }
 
@@ -420,6 +438,19 @@ class Program
             text2 = "";
         }
         return dictionary;
+    }
+
+    /// <summary>
+    /// 不区分大小写的字符串替换
+    /// </summary>
+    private static string ReplaceIgnoreCase(string input, string oldValue, string newValue)
+    {
+        int index = input.IndexOf(oldValue, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            return input.Substring(0, index) + newValue + input.Substring(index + oldValue.Length);
+        }
+        return input;
     }
 
 

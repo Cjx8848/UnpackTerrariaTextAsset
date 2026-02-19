@@ -1,4 +1,4 @@
-﻿using AssetsTools.NET;
+using AssetsTools.NET;
 using AssetsTools.NET.Cpp2IL;
 using AssetsTools.NET.Extra;
 
@@ -139,7 +139,15 @@ public class AssetWorkspace
         LoadedFiles.Add(fromFile);
         LoadedFileNames.Add(fromFile.path.ToLower());
 
+        // Load TextAsset resources (ClassId 49)
         foreach (AssetFileInfo info in fromFile.file.GetAssetsOfType(AssetClassID.TextAsset))
+        {
+            AssetContainer cont = new AssetContainer(info, fromFile);
+            LoadedAssets.Add(cont.AssetId, cont);
+        }
+        
+        // Load Texture2D resources (ClassId 28)
+        foreach (AssetFileInfo info in fromFile.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
             AssetContainer cont = new AssetContainer(info, fromFile);
             LoadedAssets.Add(cont.AssetId, cont);
