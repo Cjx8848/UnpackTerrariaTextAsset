@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,15 +12,7 @@
 	</PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="ConfigurationManager.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
     <None Remove="Libs\classdata.tpk" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="ConfigurationManager.cs" />
   </ItemGroup>
 
 	<ItemGroup>

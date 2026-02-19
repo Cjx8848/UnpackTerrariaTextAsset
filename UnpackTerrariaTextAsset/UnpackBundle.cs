@@ -1,4 +1,4 @@
-﻿using AssetsTools.NET;
+using AssetsTools.NET;
 using AssetsTools.NET.Extra;
 using AssetsTools.NET.Texture;
 using Avalonia.Controls;
@@ -22,9 +22,18 @@ public class UnpackBundle
 
     public List<Tuple<AssetsFileInstance, byte[]>> ChangedAssetsDatas { get; set; }
 
-    public const string ImportDir = "import";
+    public string ImportDir => GetFullPath(ConfigurationManager.Settings.ImportDir);
 
-    public const string ExportDir = "export";
+    public string ExportDir => GetFullPath(ConfigurationManager.Settings.ExportDir);
+
+    public string WorkDir => GetFullPath(ConfigurationManager.Settings.WorkDir);
+
+    private string GetFullPath(string path)
+    {
+        if (Path.IsPathRooted(path))
+            return path;
+        return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, path);
+    }
 
     public UnpackBundle()
     {
@@ -39,6 +48,10 @@ public class UnpackBundle
         if (!Directory.Exists(ExportDir))
         {
             Directory.CreateDirectory(ExportDir);
+        }
+        if (!Directory.Exists(WorkDir))
+        {
+            Directory.CreateDirectory(WorkDir);
         }
     }
     public void OpenFiles(string file)
@@ -125,7 +138,7 @@ public class UnpackBundle
 
     public void BatchImport()
     {
-        var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ImportDir);
+        var dir = ImportDir;
 
         var files = Directory.GetFiles(dir);
         foreach (var file in files)
@@ -148,7 +161,7 @@ public class UnpackBundle
 
     public void BatchExport()
     {
-        var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ExportDir);
+        var dir = ExportDir;
 
         foreach (var (_, cont) in LoadAssets)
         {
