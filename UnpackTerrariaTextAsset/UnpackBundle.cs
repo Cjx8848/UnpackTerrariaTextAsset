@@ -139,6 +139,9 @@ public class UnpackBundle
 
     public void BatchImport()
     {
+        // 预处理：修改 import 目录中的 JSON 文件的语言字段
+        PreprocessJsonFiles();
+        
         var dir = ImportDir;
 
         var files = Directory.GetFiles(dir);
@@ -168,6 +171,84 @@ public class UnpackBundle
                         cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
                     AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 预处理 ImportDir 中的 JSON 文件，修改语言字段
+    /// </summary>
+    private void PreprocessJsonFiles()
+    {
+        var replacements = ConfigurationManager.Settings.LanguageFieldReplacements;
+        var filters = ConfigurationManager.Settings.LanguageFieldReplacementFilters;
+        
+        if (replacements == null || replacements.Count == 0)
+            return;
+
+        var dir = ImportDir;
+        if (!Directory.Exists(dir))
+            return;
+
+        var jsonFiles = Directory.GetFiles(dir, "*.json");
+        foreach (var file in jsonFiles)
+        {
+            string fileName = Path.GetFileNameWithoutExtension(file);
+            
+            // 检查是否在过滤器中
+            bool skipFile = false;
+            if (filters != null)
+            {
+                foreach (var filter in filters)
+                {
+                    if (fileName.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine($"跳过语言字段修改（匹配过滤器: {filter}）: {fileName}");
+                        skipFile = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (skipFile)
+                continue;
+
+            try
+            {
+                string content = File.ReadAllText(file);
+                bool modified = false;
+
+                foreach (var replacement in replacements)
+                {
+                    string fieldName = replacement.Key;
+                    string newValue = replacement.Value;
+                    
+                    // 查找 "Language": { ... "FieldName": "OldValue" ... } 模式
+                    string pattern = $"\"{fieldName}\"\\s*:\\s*\"[^\"]*\"";
+                    var regex = new System.Text.RegularExpressions.Regex(pattern);
+                    var match = regex.Match(content);
+                    
+                    if (match.Success)
+                    {
+                        string oldValue = match.Value.Split(':')[1].Trim().Trim('"');
+                        if (oldValue != newValue)
+                        {
+                            string replacementStr = $"\"{fieldName}\": \"{newValue}\"";
+                            content = regex.Replace(content, replacementStr, 1);
+                            Console.WriteLine($"语言字段修改: {fileName} - {fieldName} = \"{oldValue}\" -> \"{newValue}\"");
+                            modified = true;
+                        }
+                    }
+                }
+
+                if (modified)
+                {
+                    File.WriteAllText(file, content);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"处理文件失败 {fileName}: {ex.Message}");
             }
         }
     }

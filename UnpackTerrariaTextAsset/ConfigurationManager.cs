@@ -118,4 +118,17 @@ public class ConfigurationSettings
             ConfigurationManager.SaveConfig();
         }
     }
+
+    /// <summary>
+    /// 语言字段修改配置。
+    /// 键为Language条目中的字段名（如 "English"），值为要替换的新内容（如 "简体中文"）。
+    /// 在导入前会自动修改 ImportDir 中的 JSON 文件。
+    /// </summary>
+    public Dictionary<string, string> LanguageFieldReplacements { get; set; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// 语言字段修改过滤器。
+    /// 如果文件名包含列表中的任意关键词，则跳过该文件的语言字段修改。
+    /// </summary>
+    public List<string> LanguageFieldReplacementFilters { get; set; } = new List<string>();
 }
