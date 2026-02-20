@@ -22,7 +22,8 @@ public static class ConfigurationManager
                 ExportDir = "export",
                 WorkDir = "work",
                 OriginPath = "",
-                OutputPath = ""
+                OutputPath = "",
+                EnableTexture2D = true
             };
             SaveConfig();
         }
@@ -103,4 +104,18 @@ public class ConfigurationSettings
     /// 例如：["zh-Hans", "en-US", "Mouse_Text"] 只导出包含这些关键词的文件
     /// </summary>
     public List<string> ExportWhitelist { get; set; } = new List<string>();
+
+    private bool _enableTexture2D = true;
+    /// <summary>
+    /// 是否启用Texture2D纹理的导入和导出功能
+    /// </summary>
+    public bool EnableTexture2D
+    {
+        get => _enableTexture2D;
+        set
+        {
+            _enableTexture2D = value;
+            ConfigurationManager.SaveConfig();
+        }
+    }
 }

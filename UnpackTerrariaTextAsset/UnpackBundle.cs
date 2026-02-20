@@ -152,7 +152,7 @@ public class UnpackBundle
                 AssetTypeValueField baseField = AssetWorkspace.GetBaseField(cont)!;
                 
                 // Check if this is a Texture2D asset (ClassId 28)
-                if (cont.ClassId == 28 && extension == ".png")
+                if (cont.ClassId == 28 && extension == ".png" && ConfigurationManager.Settings.EnableTexture2D)
                 {
                     ImportTexture2D(baseField, file, cont);
                 }
@@ -176,107 +176,60 @@ public class UnpackBundle
     {
         try
         {
-            // Load PNG image
-            using (var image = Image.Load(filePath))
-            {
-                // Get texture info from baseField
-                int origWidth = baseField["m_Width"].AsInt;
-                int origHeight = baseField["m_Height"].AsInt;
-                
-                // Resize if dimensions don't match
-                if (image.Width != origWidth || image.Height != origHeight)
-                {
-                    image.Mutate(x => x.Resize(origWidth, origHeight));
-                    Console.WriteLine($"调整纹理尺寸: {Path.GetFileName(filePath)} ({image.Width}x{image.Height} -> {origWidth}x{origHeight})");
-                }
+            // 使用 UABEA 的导入方式
+            TextureFormat fmt = (TextureFormat)baseField["m_TextureFormat"].AsInt;
+            
+            byte[] platformBlob = TextureHelper.GetPlatformBlob(baseField);
+            uint platform = cont.FileInstance.file.Metadata.TargetPlatform;
 
-                // Convert to BGRA32 format
-                using (var bgraImage = image.CloneAs<Bgra32>())
-                {
-                    // Flip vertically (Unity stores textures flipped)
-                    bgraImage.Mutate(i => i.Flip(FlipMode.Vertical));
-                    
-                    // Get raw pixel data
-                    byte[] pixelData = new byte[origWidth * origHeight * 4];
-                    bgraImage.CopyPixelDataTo(pixelData);
-                    
-                    // Read current texture info
-                    var texture = TextureFile.ReadTextureFile(baseField);
-                    
-                    // Get the texture format
-                    int textureFormat = baseField["m_TextureFormat"].AsInt;
-                    
-                    // Encode the pixel data to the appropriate format
-                    byte[] encodedData = EncodeTextureData(pixelData, origWidth, origHeight, textureFormat);
-                    
-                    // Check if texture uses stream data
-                    var streamData = baseField["m_StreamData"];
-                    long streamOffset = streamData["offset"].AsLong;
-                    
-                    if (streamOffset > 0 || (streamData["size"].AsLong > 0 && !string.IsNullOrEmpty(streamData["path"].AsString)))
-                    {
-                        // Streamed texture - save to separate file
-                        string streamPath = streamData["path"].AsString;
-                        if (!string.IsNullOrEmpty(streamPath))
-                        {
-                            // Update the stream file
-                            string fullStreamPath = Path.Combine(Path.GetDirectoryName(this.BundleInst.path) ?? "", streamPath);
-                            if (File.Exists(fullStreamPath))
-                            {
-                                using (var fs = new FileStream(fullStreamPath, FileMode.Open, FileAccess.Write))
-                                {
-                                    fs.Seek(streamOffset, SeekOrigin.Begin);
-                                    fs.Write(encodedData, 0, encodedData.Length);
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Embedded texture - update image data directly
-                        baseField["image data"].AsByteArray = encodedData;
-                    }
-                    
-                    // Update texture dimensions if changed
-                    baseField["m_Width"].AsInt = origWidth;
-                    baseField["m_Height"].AsInt = origHeight;
-                    
-                    // Write the modified asset
-                    byte[] savedAsset = baseField.WriteToByteArray();
-                    var replacer = new AssetsReplacerFromMemory(
-                        cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
-                    AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
-                    
-                    Console.WriteLine($"导入纹理: {Path.GetFileName(filePath)} ({origWidth}x{origHeight})");
-                }
+            int mips = baseField["m_MipCount"].AsInt;
+            if (mips < 1) mips = 1;
+
+            byte[] encImageBytes = TextureImportExport.Import(filePath, fmt, out int width, out int height, ref mips, platform, platformBlob);
+
+            if (encImageBytes == null)
+            {
+                Console.WriteLine($"导入纹理失败 {Path.GetFileName(filePath)}: 无法编码纹理格式 {fmt}");
+                return;
             }
+
+            // 检查是否需要格式转换（ETC_RGB4 -> DXT1）
+            TextureFormat finalFormat = fmt;
+            if (fmt == TextureFormat.ETC_RGB4)
+            {
+                finalFormat = TextureFormat.DXT1;
+                Console.WriteLine($"  格式转换: {fmt} -> {finalFormat}");
+            }
+
+            AssetTypeValueField m_StreamData = baseField["m_StreamData"];
+            m_StreamData["offset"].AsInt = 0;
+            m_StreamData["size"].AsInt = 0;
+            m_StreamData["path"].AsString = "";
+
+            if (!baseField["m_MipCount"].IsDummy)
+                baseField["m_MipCount"].AsInt = mips;
+
+            baseField["m_TextureFormat"].AsInt = (int)finalFormat;
+            baseField["m_CompleteImageSize"].AsInt = encImageBytes.Length;
+            baseField["m_Width"].AsInt = width;
+            baseField["m_Height"].AsInt = height;
+
+            AssetTypeValueField image_data = baseField["image data"];
+            image_data.Value.ValueType = AssetValueType.ByteArray;
+            image_data.TemplateField.ValueType = AssetValueType.ByteArray;
+            image_data.AsByteArray = encImageBytes;
+
+            byte[] savedAsset = baseField.WriteToByteArray();
+            var replacer = new AssetsReplacerFromMemory(
+                cont.PathId, cont.ClassId, cont.MonoId, savedAsset);
+            AssetWorkspace.AddReplacer(cont.FileInstance, replacer, new MemoryStream(savedAsset));
+
+            Console.WriteLine($"导入纹理: {Path.GetFileName(filePath)} ({width}x{height}, 格式: {finalFormat})");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"导入纹理失败 {Path.GetFileName(filePath)}: {ex.Message}");
         }
-    }
-
-    private byte[] EncodeTextureData(byte[] rgbaData, int width, int height, int textureFormat)
-    {
-        // For now, just return RGBA32 data directly
-        // Unity texture format 4 is RGBA32
-        if (textureFormat == 4 || textureFormat == 0)
-        {
-            // Convert BGRA to RGBA if needed
-            byte[] rgba = new byte[rgbaData.Length];
-            for (int i = 0; i < rgbaData.Length; i += 4)
-            {
-                rgba[i] = rgbaData[i + 2];     // R
-                rgba[i + 1] = rgbaData[i + 1]; // G
-                rgba[i + 2] = rgbaData[i];     // B
-                rgba[i + 3] = rgbaData[i + 3]; // A
-            }
-            return rgba;
-        }
-        
-        // For other formats, return data as-is (may need format-specific encoding)
-        return rgbaData;
     }
 
     public void BatchExport()
@@ -328,7 +281,7 @@ public class UnpackBundle
             }
 
             // Check if this is a Texture2D asset (ClassId 28 is Texture2D)
-            if (cont.ClassId == 28)
+            if (cont.ClassId == 28 && ConfigurationManager.Settings.EnableTexture2D)
             {
                 ExportTexture2D(baseField, name, dir, fileName, cont);
                 textureCount++;
@@ -359,31 +312,46 @@ public class UnpackBundle
     {
         try
         {
-            // Read Texture2D data
-            var texture = TextureFile.ReadTextureFile(baseField);
-            
-            // Use the FileInstance directly from the container
-            AssetsFileInstance fileInst = cont.FileInstance;
-            
-            // Get the raw texture data
-            byte[] textureData = texture.GetTextureData(fileInst);
-            
-            if (textureData == null || textureData.Length == 0)
+            // 使用 UABEA 的导出方式
+            TextureFile texFile = TextureFile.ReadTextureFile(baseField);
+
+            // 0x0 texture, usually called like Font Texture or smth
+            if (texFile.m_Width == 0 && texFile.m_Height == 0)
             {
-                Console.WriteLine($"警告: 无法获取纹理数据: {name}");
+                Console.WriteLine($"警告: 纹理尺寸为 0x0: {name}");
                 return;
             }
 
-            // Convert to ImageSharp image
-            using (var image = Image.LoadPixelData<Bgra32>(textureData, texture.m_Width, texture.m_Height))
+            if (!TextureHelper.GetResSTexture(texFile, cont.FileInstance))
             {
-                // Flip vertically (Unity stores textures flipped)
-                image.Mutate(i => i.Flip(FlipMode.Vertical));
-                
-                // Save as PNG
-                string file = Path.Combine(dir, $"{fileName}.png");
-                image.SaveAsPng(file);
-                Console.WriteLine($"导出纹理: {name} -> {fileName}.png ({texture.m_Width}x{texture.m_Height})");
+                string resSName = Path.GetFileName(texFile.m_StreamData.path);
+                Console.WriteLine($"警告: resS 文件未找到: {resSName}");
+                return;
+            }
+
+            byte[] data = TextureHelper.GetRawTextureBytes(texFile, cont.FileInstance);
+
+            if (data == null)
+            {
+                string resSName = Path.GetFileName(texFile.m_StreamData.path);
+                Console.WriteLine($"警告: resS 文件在磁盘上未找到: {resSName}");
+                return;
+            }
+
+            byte[] platformBlob = TextureHelper.GetPlatformBlob(baseField);
+            uint platform = cont.FileInstance.file.Metadata.TargetPlatform;
+
+            string file = Path.Combine(dir, $"{fileName}.png");
+            bool success = TextureImportExport.Export(data, file, texFile.m_Width, texFile.m_Height, (TextureFormat)texFile.m_TextureFormat, platform, platformBlob);
+            
+            if (success)
+            {
+                Console.WriteLine($"导出纹理: {name} -> {fileName}.png ({texFile.m_Width}x{texFile.m_Height})");
+            }
+            else
+            {
+                string texFormat = ((TextureFormat)texFile.m_TextureFormat).ToString();
+                Console.WriteLine($"导出纹理失败 {name}: 无法解码纹理格式 {texFormat}");
             }
         }
         catch (Exception ex)
