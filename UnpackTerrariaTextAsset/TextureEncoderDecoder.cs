@@ -184,7 +184,7 @@ public static class TextureEncoderDecoder
                     Console.WriteLine($"警告: Crunch 格式 {format} 暂不支持");
                     return null;
                 }
-            //pvrtexlib
+            //pvrtexlib - 使用 AssetRipper.TextureDecoder 解码
             case TextureFormat.ARGB32:
             case TextureFormat.BGRA32:
             case TextureFormat.RGBA32:
@@ -202,8 +202,15 @@ public static class TextureEncoderDecoder
             case TextureFormat.RFloat:
             case TextureFormat.RGFloat:
             case TextureFormat.RGBAFloat:
-            /////////////////////////////////
             case TextureFormat.YUY2:
+            case TextureFormat.DXT1:
+            case TextureFormat.DXT5:
+            case TextureFormat.BC7:
+            case TextureFormat.BC6H:
+            case TextureFormat.BC4:
+            case TextureFormat.BC5:
+            case TextureFormat.RGB9e5Float:
+            case TextureFormat.RGBA64:
             case TextureFormat.EAC_R:
             case TextureFormat.EAC_R_SIGNED:
             case TextureFormat.EAC_RG:
@@ -214,6 +221,11 @@ public static class TextureEncoderDecoder
             case TextureFormat.ETC2_RGB4:
             case TextureFormat.ETC2_RGBA1:
             case TextureFormat.ETC2_RGBA8:
+                {
+                    byte[] res = DecodeAssetRipperTex(data, width, height, format);
+                    return res;
+                }
+            // PVRTC 和 ASTC 格式需要 PVRTexLib
             case TextureFormat.PVRTC_RGB2:
             case TextureFormat.PVRTC_RGBA2:
             case TextureFormat.PVRTC_RGB4:
@@ -231,22 +243,8 @@ public static class TextureEncoderDecoder
             case TextureFormat.ASTC_RGBA_10x10:
             case TextureFormat.ASTC_RGBA_12x12:
                 {
-                    // 简化实现：使用 AssetRipper.TextureDecoder
-                    Console.WriteLine($"警告: 格式 {format} 需要 PVRTexLib，暂使用简化实现");
+                    Console.WriteLine($"警告: 格式 {format} 需要 PVRTexLib，暂不支持");
                     return null;
-                }
-            //assetripper.texture
-            case TextureFormat.DXT1:
-            case TextureFormat.DXT5:
-            case TextureFormat.BC7:
-            case TextureFormat.BC6H:
-            case TextureFormat.BC4:
-            case TextureFormat.BC5:
-            case TextureFormat.RGB9e5Float:
-            case TextureFormat.RGBA64:
-                {
-                    byte[] res = DecodeAssetRipperTex(data, width, height, format);
-                    return res;
                 }
             default:
                 return null;
